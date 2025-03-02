@@ -5,6 +5,7 @@ import io
 import base64
 import os
 import json
+import re
 
 # Function to convert image to base64 (required for Ollama vision models)
 def image_to_base64(image_path):
@@ -26,6 +27,22 @@ def pdf_to_text(pdf_path):
         print(f"Error reading PDF text directly: {e}")
         return None
 
+# Function to convert string to number (float or int) if it looks like a numeric value
+def convert_to_number(value):
+    if isinstance(value, str):
+        # Remove any non-numeric characters except decimal points and commas
+        value = re.sub(r'[^\d.]', '', value)
+        try:
+            # Try converting to float first (handles decimals)
+            num = float(value)
+            # If the number has no decimal part (or is effectively an integer), return as int
+            if num.is_integer():
+                return int(num)
+            return num
+        except ValueError:
+            return value  # Return as string if not a number
+    return value
+
 # Function to process input (image or PDF) with Ollama vision model and extract key-value pairs
 def extract_key_value_pairs(file_path):
     # Check file extension
@@ -40,14 +57,15 @@ def extract_key_value_pairs(file_path):
             # Call Ollama vision model with a prompt to extract key-value pairs
             response = ollama.generate(
                 model="llava",
-                prompt="Analyze this image of a document (e.g., bank statement, paycheck, or form) and extract all key-value pairs. Return the result as a JSON object where keys are the field names (e.g., 'NAME', 'ACCOUNT NO.', 'DATE') and values are their corresponding data. Handle various formats and ensure accuracy. If a field is unclear or missing, include it with a value of 'N/A'.",
+                prompt="Analyze this image of a document (e.g., bank statement, paycheck, or form) and extract all key-value pairs. Return the result as a JSON object where keys are the field names (e.g., 'NAME', 'ACCOUNT NO.', 'DATE') and values are their corresponding data. Handle various formats and ensure accuracy. If a field is unclear or missing, include it with a value of 'N/A'. For numeric values (e.g., salaries, amounts), ensure they are in a format that can be parsed as numbers (e.g., '1234.56' or '1234').",
                 images=[img_base64]
             )
             
             # Try to parse the response as JSON
             try:
                 result = json.loads(response["response"])
-                return result
+                # Convert numeric values in the result
+                return convert_values_to_numbers(result)
             except json.JSONDecodeError:
                 # If the response isn't valid JSON, parse it manually or return as text
                 print("Warning: Response is not valid JSON. Attempting to parse manually.")
@@ -68,6 +86,7 @@ def extract_key_value_pairs(file_path):
                 Analyze this text from a PDF document (e.g., bank statement, paycheck, or form) and extract all key-value pairs. 
                 Return the result as a JSON object where keys are the field names (e.g., 'NAME', 'ACCOUNT NO.', 'DATE') and values are their corresponding data. 
                 Handle various formats and ensure accuracy. If a field is unclear or missing, include it with a value of 'N/A'.
+                For numeric values (e.g., salaries, amounts), ensure they are in a format that can be parsed as numbers (e.g., '1234.56' or '1234').
                 
                 Text content: {pdf_text}
                 """
@@ -79,7 +98,8 @@ def extract_key_value_pairs(file_path):
                 
                 try:
                     result = json.loads(response["response"])
-                    return result
+                    # Convert numeric values in the result
+                    return convert_values_to_numbers(result)
                 except json.JSONDecodeError:
                     print("Warning: Response is not valid JSON. Attempting to parse manually.")
                     return parse_text_response(response["response"])
@@ -99,7 +119,7 @@ def extract_key_value_pairs(file_path):
             
             response = ollama.generate(
                 model="llava",
-                prompt="Analyze this image of a PDF document (e.g., bank statement, paycheck, or form) and extract all key-value pairs. Return the result as a JSON object where keys are the field names (e.g., 'NAME', 'ACCOUNT NO.', 'DATE') and values are their corresponding data. Handle various formats and ensure accuracy. If a field is unclear or missing, include it with a value of 'N/A'.",
+                prompt="Analyze this image of a PDF document (e.g., bank statement, paycheck, or form) and extract all key-value pairs. Return the result as a JSON object where keys are the field names (e.g., 'NAME', 'ACCOUNT NO.', 'DATE') and values are their corresponding data. Handle various formats and ensure accuracy. If a field is unclear or missing, include it with a value of 'N/A'. For numeric values (e.g., salaries, amounts), ensure they are in a format that can be parsed as numbers (e.g., '1234.56' or '1234').",
                 images=[img_base64]
             )
             
@@ -108,7 +128,8 @@ def extract_key_value_pairs(file_path):
             
             try:
                 result = json.loads(response["response"])
-                return result
+                # Convert numeric values in the result
+                return convert_values_to_numbers(result)
             except json.JSONDecodeError:
                 print("Warning: Response is not valid JSON. Attempting to parse manually.")
                 return parse_text_response(response["response"])
@@ -118,7 +139,7 @@ def extract_key_value_pairs(file_path):
     else:
         return {"error": "Unsupported file format. Please provide a .pdf, .png, .jpg, .jpeg, or .bmp file."}
 
-# Helper function to manually parse text response into key-value pairs
+# Helper function to manually parse text response into key-value pairs and convert numbers
 def parse_text_response(text_response):
     key_value_pairs = {}
     lines = text_response.split("\n")
@@ -129,7 +150,7 @@ def parse_text_response(text_response):
         if ":" in line:
             key, value = [part.strip() for part in line.split(":", 1)]
             if key and value:
-                key_value_pairs[key] = value
+                key_value_pairs[key] = convert_to_number(value)
         elif current_key and line:
             # Append to the value of the last key if it's a continuation
             key_value_pairs[current_key] = (key_value_pairs[current_key] + " " + line).strip()
@@ -139,6 +160,18 @@ def parse_text_response(text_response):
         key_value_pairs["error"] = "Unable to parse key-value pairs from response."
     
     return key_value_pairs
+
+# Function to recursively convert numeric strings to numbers in a dictionary
+def convert_values_to_numbers(data):
+    if isinstance(data, dict):
+        for key, value in data.items():
+            data[key] = convert_values_to_numbers(value)
+    elif isinstance(data, list):
+        for i in range(len(data)):
+            data[i] = convert_values_to_numbers(data[i])
+    elif isinstance(data, str):
+        return convert_to_number(data)
+    return data
 
 # Example usage
 if __name__ == "__main__":
@@ -152,6 +185,13 @@ if __name__ == "__main__":
     print("Extracted Key-Value Pairs:")
     if isinstance(result, dict):
         import json
-        print(json.dumps(result, indent=2))
+        # Use a custom encoder to handle non-JSON-serializable types like floats
+        class FloatEncoder(json.JSONEncoder):
+            def default(self, obj):
+                if isinstance(obj, float):
+                    return float("{:.2f}".format(obj))
+                return super().default(obj)
+        
+        print(json.dumps(result, indent=2, cls=FloatEncoder))
     else:
         print(result)
