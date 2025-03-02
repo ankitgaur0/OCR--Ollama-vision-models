@@ -27,10 +27,18 @@ def pdf_to_text(pdf_path):
         print(f"Error reading PDF text directly: {e}")
         return None
 
-# Function to convert string to number (float or int) if it looks like a numeric value
-def convert_to_number(value):
-    if isinstance(value, str):
-        # Remove any non-numeric characters except decimal points and commas
+# List of keys that should be treated as numeric (floats or integers)
+NUMERIC_FIELDS = {
+    "TOTAL WORKING DAYS", "PRESENT DAYS", "LATE COMING", "HALF DAY",
+    "BASIC SALARY", "PROFESSIONAL TAX", "CONVEYANCE ALLOWANCE", "DEPOSIT",
+    "HRA ALLOWANCE", "LOYALTY BONUS", "MEDICAL ALLOWANCE", "PAID LEAVE",
+    "STIPEND", "TOTAL EARNINGS", "TOTAL DEDUCTION", "NET SALARY AMOUNT PAYABLE"
+}
+
+# Function to clean and convert string to number (float or int) if it looks like a numeric value
+def clean_and_convert_to_number(value, is_numeric_field=False):
+    if isinstance(value, str) and is_numeric_field:
+        # Remove quotes, commas, parentheses, "Day(s)", and other non-numeric characters except decimal points
         value = re.sub(r'[^\d.]', '', value)
         try:
             # Try converting to float first (handles decimals)
@@ -41,7 +49,7 @@ def convert_to_number(value):
             return num
         except ValueError:
             return value  # Return as string if not a number
-    return value
+    return value  # Return as-is for non-numeric fields or non-string values
 
 # Function to process input (image or PDF) with Ollama vision model and extract key-value pairs
 def extract_key_value_pairs(file_path):
@@ -57,14 +65,14 @@ def extract_key_value_pairs(file_path):
             # Call Ollama vision model with a prompt to extract key-value pairs
             response = ollama.generate(
                 model="llava",
-                prompt="Analyze this image of a document (e.g., bank statement, paycheck, or form) and extract all key-value pairs. Return the result as a JSON object where keys are the field names (e.g., 'NAME', 'ACCOUNT NO.', 'DATE') and values are their corresponding data. Handle various formats and ensure accuracy. If a field is unclear or missing, include it with a value of 'N/A'. For numeric values (e.g., salaries, amounts), ensure they are in a format that can be parsed as numbers (e.g., '1234.56' or '1234').",
+                prompt="Analyze this image of a document (e.g., bank statement, paycheck, or form) and extract all key-value pairs. Return the result as a clean JSON object where keys are the field names (e.g., 'NAME', 'ACCOUNT NO.', 'DATE') and values are their corresponding data without extra characters like quotes, commas, or 'Day(s)'. Handle various formats and ensure accuracy. If a field is unclear or missing, include it with a value of 'N/A'. For numeric values (e.g., salaries, days, amounts), ensure they are in a numeric format (e.g., 1234.56 or 1234). For non-numeric fields like names and dates, preserve the original string format (e.g., '01-Jan-2014', 'Shivlal Ramnikbhai Sheladiya').",
                 images=[img_base64]
             )
             
             # Try to parse the response as JSON
             try:
                 result = json.loads(response["response"])
-                # Convert numeric values in the result
+                # Convert numeric values in the result based on field names
                 return convert_values_to_numbers(result)
             except json.JSONDecodeError:
                 # If the response isn't valid JSON, parse it manually or return as text
@@ -84,21 +92,22 @@ def extract_key_value_pairs(file_path):
                 # Use the text directly within the prompt (combine with the prompt string)
                 prompt_with_text = f"""
                 Analyze this text from a PDF document (e.g., bank statement, paycheck, or form) and extract all key-value pairs. 
-                Return the result as a JSON object where keys are the field names (e.g., 'NAME', 'ACCOUNT NO.', 'DATE') and values are their corresponding data. 
+                Return the result as a clean JSON object where keys are the field names (e.g., 'NAME', 'ACCOUNT NO.', 'DATE') and values are their corresponding data without extra characters like quotes, commas, or 'Day(s)'. 
                 Handle various formats and ensure accuracy. If a field is unclear or missing, include it with a value of 'N/A'.
-                For numeric values (e.g., salaries, amounts), ensure they are in a format that can be parsed as numbers (e.g., '1234.56' or '1234').
+                For numeric values (e.g., salaries, days, amounts), ensure they are in a numeric format (e.g., 1234.56 or 1234). 
+                For non-numeric fields like names and dates, preserve the original string format (e.g., '01-Jan-2014', 'Shivlal Ramnikbhai Sheladiya').
                 
                 Text content: {pdf_text}
                 """
                 
                 response = ollama.generate(
-                    model="llava",
+                    model="llama3.2-vision:latest",
                     prompt=prompt_with_text
                 )
                 
                 try:
                     result = json.loads(response["response"])
-                    # Convert numeric values in the result
+                    # Convert numeric values in the result based on field names
                     return convert_values_to_numbers(result)
                 except json.JSONDecodeError:
                     print("Warning: Response is not valid JSON. Attempting to parse manually.")
@@ -118,8 +127,8 @@ def extract_key_value_pairs(file_path):
             img_base64 = image_to_base64(temp_image_path)
             
             response = ollama.generate(
-                model="llava",
-                prompt="Analyze this image of a PDF document (e.g., bank statement, paycheck, or form) and extract all key-value pairs. Return the result as a JSON object where keys are the field names (e.g., 'NAME', 'ACCOUNT NO.', 'DATE') and values are their corresponding data. Handle various formats and ensure accuracy. If a field is unclear or missing, include it with a value of 'N/A'. For numeric values (e.g., salaries, amounts), ensure they are in a format that can be parsed as numbers (e.g., '1234.56' or '1234').",
+                model="llama3.2-vision:latest",
+                prompt="Analyze this image of a PDF document (e.g., bank statement, paycheck, or form) and extract all key-value pairs. Return the result as a clean JSON object where keys are the field names (e.g., 'NAME', 'ACCOUNT NO.', 'DATE') and values are their corresponding data without extra characters like quotes, commas, or 'Day(s)'. Handle various formats and ensure accuracy. If a field is unclear or missing, include it with a value of 'N/A'. For numeric values (e.g., salaries, days, amounts), ensure they are in a numeric format (e.g., 1234.56 or 1234). For non-numeric fields like names and dates, preserve the original string format (e.g., '01-Jan-2014', 'Shivlal Ramnikbhai Sheladiya').",
                 images=[img_base64]
             )
             
@@ -128,7 +137,7 @@ def extract_key_value_pairs(file_path):
             
             try:
                 result = json.loads(response["response"])
-                # Convert numeric values in the result
+                # Convert numeric values in the result based on field names
                 return convert_values_to_numbers(result)
             except json.JSONDecodeError:
                 print("Warning: Response is not valid JSON. Attempting to parse manually.")
@@ -148,11 +157,19 @@ def parse_text_response(text_response):
     for line in lines:
         line = line.strip()
         if ":" in line:
-            key, value = [part.strip() for part in line.split(":", 1)]
-            if key and value:
-                key_value_pairs[key] = convert_to_number(value)
+            # Split by colon and strip whitespace and quotes
+            parts = [part.strip().strip('"') for part in line.split(":", 1)]
+            if len(parts) == 2 and parts[0] and parts[1]:
+                key, value = parts
+                # Clean value by removing commas, parentheses, "Day(s)", etc.
+                value = re.sub(r'[\n,"\(Day\(s\)\)]', '', value)
+                # Check if the key is in NUMERIC_FIELDS to decide whether to convert to number
+                is_numeric = key.upper() in NUMERIC_FIELDS
+                key_value_pairs[key] = clean_and_convert_to_number(value, is_numeric)
         elif current_key and line:
-            # Append to the value of the last key if it's a continuation
+            # Append to the value of the last key if it's a continuation (clean the line)
+            line = re.sub(r'[\n,"\(Day\(s\)\)]', '', line)
+            is_numeric = current_key.upper() in NUMERIC_FIELDS
             key_value_pairs[current_key] = (key_value_pairs[current_key] + " " + line).strip()
     
     # Handle cases where keys or values might be missing or unclear
@@ -161,16 +178,18 @@ def parse_text_response(text_response):
     
     return key_value_pairs
 
-# Function to recursively convert numeric strings to numbers in a dictionary
+# Function to recursively convert numeric strings to numbers in a dictionary based on field names
 def convert_values_to_numbers(data):
     if isinstance(data, dict):
         for key, value in data.items():
-            data[key] = convert_values_to_numbers(value)
+            # Check if the key (case-insensitive) is in NUMERIC_FIELDS to decide whether to convert
+            is_numeric = key.upper() in NUMERIC_FIELDS
+            data[key] = convert_values_to_numbers(value) if isinstance(value, (dict, list)) else clean_and_convert_to_number(value, is_numeric)
     elif isinstance(data, list):
         for i in range(len(data)):
             data[i] = convert_values_to_numbers(data[i])
     elif isinstance(data, str):
-        return convert_to_number(data)
+        return data  # Default to string unless explicitly numeric
     return data
 
 # Example usage
